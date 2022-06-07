@@ -83,6 +83,7 @@ func newCluster(t *testing.T, numNodes int) *cluster {
 
 	c.logger = logger
 
+	// activate and initilize all server
 	for i := 1; i <= numNodes; i++ {
 		id := uint32(i)
 		c.initialize(id)
@@ -96,6 +97,7 @@ func newCluster(t *testing.T, numNodes int) *cluster {
 		c.start(id)
 	}
 
+	// check your cpu core is at least 2
 	c.warnNumberOfCPUs()
 
 	return &c
@@ -136,6 +138,7 @@ func (c *cluster) initialize(serverId uint32) {
 		HeartbeatInterval: 50 * time.Millisecond,
 	}
 
+	// initilize raft in this server
 	raft := NewRaft(serverId, peers, persister, config, c.logger)
 	c.rafts[serverId] = raft
 
