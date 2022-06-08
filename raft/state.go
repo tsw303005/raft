@@ -112,6 +112,7 @@ func (rs *raftState) getLog(id uint64) *pb.Entry {
 }
 
 // getLogs gets all logs from the start id to the end and returns empty list if not found
+// if startId is 0, return empty list
 func (rs *raftState) getLogs(startId uint64) []*pb.Entry {
 	if len(rs.logs) == 0 {
 		return []*pb.Entry{}
