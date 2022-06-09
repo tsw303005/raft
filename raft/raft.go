@@ -103,7 +103,7 @@ func (r *Raft) appendEntries(req *pb.AppendEntriesRequest) (*pb.AppendEntriesRes
 
 	// TODO: (A.4) - if AppendEntries RPC received from new leader: convert to follower
 	// Log: r.logger.Info("receive request from leader, fallback to follower", zap.Uint64("term", r.currentTerm))
-	if req.GetTerm() == r.currentTerm && r.raftState.state.String() == "Candidate" {
+	if r.raftState.state.String() != "Follower" {
 		r.toFollower(req.GetTerm())
 		r.logger.Info("receive request from leader, fallback to follower", zap.Uint64("term", r.currentTerm))
 	}
@@ -185,7 +185,7 @@ func (r *Raft) requestVote(req *pb.RequestVoteRequest) (*pb.RequestVoteResponse,
 		return &pb.RequestVoteResponse{Term: r.currentTerm, VoteGranted: false}, nil
 	}
 
-	if _, term := r.getLastLog(); term > req.GetLastLogTerm() {
+	if id, term := r.getLastLog(); term > req.GetLastLogTerm() || (id > req.GetLastLogId() && term == req.GetLastLogTerm()) {
 		// TODO: (A.7) - if votedFor is null or candidateId, and candidate’s log is at least as up-to-date as receiver’s log, grant vote
 		// Hint: (fix the condition) if the local last entry is more up-to-date than the candidate's last entry, reply false
 		// Hint: use `getLastLog` to get the last log entry
@@ -209,6 +209,7 @@ func (r *Raft) requestVote(req *pb.RequestVoteRequest) (*pb.RequestVoteResponse,
 // raft main loop
 
 func (r *Raft) Run(ctx context.Context) {
+	// load raft state from prev or init
 	if err := r.loadRaftState(r.persister); err != nil {
 		r.logger.Error("fail to load raft state", zap.Error(err))
 		return
@@ -219,6 +220,7 @@ func (r *Raft) Run(ctx context.Context) {
 		zap.Uint32("votedFor", r.votedFor),
 		zap.Int("logs", len(r.logs)))
 
+	// every server start from here, and run according its role now
 	for {
 		select {
 		case <-ctx.Done():
@@ -245,7 +247,7 @@ func (r *Raft) ApplyCh() <-chan *pb.Entry {
 // follower related
 
 func (r *Raft) runFollower(ctx context.Context) {
-	r.logger.Info("running follower")
+	r.logger.Info("running follower", zap.Uint64("id", uint64(r.id)))
 
 	timeoutCh := randomTimeout(r.config.HeartbeatTimeout)
 
@@ -254,13 +256,15 @@ func (r *Raft) runFollower(ctx context.Context) {
 		case <-ctx.Done():
 			return
 
+		// check heart beat
 		case <-timeoutCh:
 			timeoutCh = randomTimeout(r.config.HeartbeatTimeout)
 
-			if time.Now().Sub(r.lastHeartbeat) > r.config.HeartbeatTimeout {
+			if time.Since(r.lastHeartbeat) > r.config.HeartbeatTimeout {
 				r.handleFollowerHeartbeatTimeout()
 			}
 
+		// handle incoming requests, ex: heartbeat, replication, vote
 		case rpc := <-r.rpcCh:
 			r.handleRPCRequest(rpc)
 		}
@@ -272,7 +276,8 @@ func (r *Raft) handleFollowerHeartbeatTimeout() {
 	// Hint: use `toCandidate` to convert to candidate
 	r.toCandidate()
 
-	r.logger.Info("heartbeat timeout, change state from follower to candidate")
+	r.logger.Info("heartbeat timeout, change state from follower to candidate",
+		zap.Int("id", int(r.id)))
 }
 
 // candidate related
@@ -325,6 +330,7 @@ func (r *Raft) voteForSelf(grantedVotes *int) {
 	// TODO: (A.10) vote for self
 	// Hint: use `voteFor` to vote for self
 	r.voteFor(r.id, true)
+	(*grantedVotes)++
 
 	r.logger.Info("vote for self", zap.Uint64("term", r.currentTerm))
 }
@@ -360,7 +366,7 @@ func (r *Raft) handleVoteResult(vote *voteResult, grantedVotes *int, votesNeeded
 	// TODO: (A.12) - if RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower
 	// Hint: use `toFollower` to convert to follower
 	// Log: r.logger.Info("receive new term on RequestVote response, fallback to follower", zap.Uint32("peer", vote.peerId))
-	if !vote.VoteGranted {
+	if vote.Term > r.currentTerm {
 		r.toFollower(vote.GetTerm())
 		r.logger.Info("receive new term on RequestVote response, fallback to follower", zap.Uint32("peer", vote.peerId))
 		return
@@ -374,7 +380,7 @@ func (r *Raft) handleVoteResult(vote *voteResult, grantedVotes *int, votesNeeded
 	// TODO: (A.13) - if votes received from majority of servers: become leader
 	// Log: r.logger.Info("election won", zap.Int("grantedVote", (*grantedVotes)), zap.Uint64("term", r.currentTerm))
 	// Hint: use `toLeader` to convert to leader
-	if *grantedVotes >= votesNeeded {
+	if (*grantedVotes) >= votesNeeded {
 		r.toLeader()
 		r.logger.Info("election won", zap.Int("grantedVote", (*grantedVotes)), zap.Uint64("term", r.currentTerm))
 	}
