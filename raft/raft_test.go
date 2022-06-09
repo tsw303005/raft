@@ -363,12 +363,14 @@ func TestCannotCommitLogIfTermMismatch(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// log 2 is replicated on no follower
+	// 只有 old leader 拿到 command 2
 	c.disconnectAll(oldLeaderId)
 	data2 := []byte("command 2")
 	log2Id := c.applyCommand(oldLeaderId, oldLeaderTerm, data2)
 
 	time.Sleep(1 * time.Second)
 	newLeaderId, newLeaderTerm := c.checkSingleLeader()
+	// new leader will not be old leader
 	if newLeaderId == oldLeaderId {
 		t.Fatalf("invalid leader, node %d already stop", oldLeaderId)
 	}
@@ -381,11 +383,12 @@ func TestCannotCommitLogIfTermMismatch(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	leaderId, leaderTerm := c.checkSingleLeader()
 	if newLeaderId != leaderId || newLeaderTerm != leaderTerm {
-		t.Fatal("new leader should not be affected when the old leader com")
+		t.Fatal("new leader should not be affected when the old leader come back")
 	}
 
 	// we disconnect all outgoing RPCs to all servers except the old leader
 	// thus forces the old leader to become the next leader
+	// 全部會只剩下 old leader，所以他會是 leader
 	for i := 1; i <= numNodes; i++ {
 		id := uint32(i)
 		if id != oldLeaderId {
@@ -411,6 +414,7 @@ func TestCannotCommitLogIfTermMismatch(t *testing.T) {
 	}
 
 	// log 2 should be replicated to all servers now but cannot commit since the log does not match current term
+	// 因為 log 2 在 old leader 的 term 不一樣
 	for id, raft := range c.rafts {
 		raft.mu.Lock()
 		if raft.getLog(log2Id) == nil {
