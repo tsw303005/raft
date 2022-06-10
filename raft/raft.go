@@ -92,16 +92,16 @@ func (r *Raft) appendEntries(req *pb.AppendEntriesRequest) (*pb.AppendEntriesRes
 	// verify the last log entry
 	prevLogId := req.GetPrevLogId()
 	prevLogTerm := req.GetPrevLogTerm()
-	if prevLogId != 0 && prevLogTerm != 0 {
-		log := r.getLog(prevLogId)
-
-		if prevLogTerm != log.GetTerm() {
-			r.logger.Info("the given previous log from leader is missing or mismatched",
-				zap.Uint64("prevLogId", prevLogId),
-				zap.Uint64("prevLogTerm", prevLogTerm),
-				zap.Uint64("logTerm", log.GetTerm()))
-
-			return &pb.AppendEntriesResponse{Term: r.currentTerm, Success: false}, nil
+	if prevLogId != 0 && prevLogTerm != nil {
+		for logId := uint64(1); logId <= prevLogId; logId++ {
+			log := r.getLog(logId)
+			if prevLogTerm[logId-1] != log.GetTerm() {
+				r.logger.Info("the given previous log from leader is missing or mismatched",
+					zap.Uint64("prevLogId", log.GetId()),
+					zap.Uint64("prevLogTerm", prevLogTerm[logId-1]),
+				)
+				return &pb.AppendEntriesResponse{Term: r.currentTerm, NextIndex: logId, Success: false}, nil
+			}
 		}
 	}
 
@@ -395,8 +395,12 @@ func (r *Raft) broadcastAppendEntries(ctx context.Context, appendEntriesResultCh
 		}
 
 		if prevLog != nil {
+			var prevLogTerm []uint64
 			req.PrevLogId = prevLog.GetId()
-			req.PrevLogTerm = prevLog.GetTerm()
+			for i := uint64(1); i <= uint64(prevLog.GetId()); i++ {
+				prevLogTerm = append(prevLogTerm, r.getLog(i).GetTerm())
+			}
+			req.PrevLogTerm = prevLogTerm
 		}
 
 		// r.logger.Debug("send append entries", zap.Uint32("peer", peerId), zap.Any("request", req), zap.Int("entries", len(entries)))
@@ -433,7 +437,7 @@ func (r *Raft) handleAppendEntriesResult(result *appendEntriesResult) {
 
 	if !result.GetSuccess() {
 		// if failed, decrease `nextIndex` and retry
-		nextIndex := r.nextIndex[peerId] - 1
+		nextIndex := result.NextIndex
 		matchIndex := r.matchIndex[peerId]
 		r.setNextAndMatchIndex(peerId, nextIndex, matchIndex)
 
